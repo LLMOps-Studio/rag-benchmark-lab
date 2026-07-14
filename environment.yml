@@ -1,0 +1,20 @@
+name: rag-benchmark-lab
+
+channels:
+  - conda-forge
+
+dependencies:
+  - python=3.11
+  - pip
+  - git
+  - curl
+  - jq
+
+  # ML / data tooling base
+  - numpy
+  - pandas
+  - scipy
+  - pyarrow
+
+  # vector + ML infra helpers
+  - faiss-cpu

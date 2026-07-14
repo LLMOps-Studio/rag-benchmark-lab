@@ -1,0 +1,49 @@
+[project]
+name = "rag-benchmark-lab"
+version = "0.1.0"
+description = "RAG evaluation and benchmarking laboratory"
+requires-python = ">=3.11"
+authors = [
+  { name = "Muhammet Ali Varlik", email = "iletisim.muhammetalivarlik@gmail.com" }
+]
+
+dependencies = [
+  "pydantic>=2.0",
+  "python-dotenv",
+  "numpy",
+  "pandas",
+  "requests",
+  "chromadb==0.5.3",
+  "streamlit>=1.35.0",
+  "mlflow>=2.15.0",
+  "langchain-core>=0.2.10",
+  "langchain-text-splitters>=0.2.0",
+  "posthog<3.0.0",
+  "llmops-common"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+  "ruff",
+  "black",
+  "mypy"
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.black]
+line-length = 88
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.hatch.metadata]
+allow-direct-references = true

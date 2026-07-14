@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # llmops-common ayrı bir repo. Onu bir org altına taşırsan (ör. llmops-labs)
+  # burayı "llmops-labs/llmops-common" olarak güncelle.
+  LLMOPS_COMMON_REPO: LLMOps-Studio/llmops-common
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - name: Checkout rag-benchmark-lab
+        uses: actions/checkout@v4
+
+      # --- Cross-repo bağımlılık ---
+      # rag-benchmark-lab, pyproject.toml'da llmops-common'ı deklare etmiyor
+      # (path/git dependency olarak eklenmedi), bu yüzden CI'da ayrıca
+      # checkout edip editable modda kurmamız gerekiyor.
+      - name: Checkout llmops-common (shared SDK)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.LLMOPS_COMMON_REPO }}
+          path: llmops-common-src
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+          cache-dependency-path: pyproject.toml
+
+      - name: Install llmops-common (editable)
+        run: pip install -e ./llmops-common-src
+
+      - name: Install rag-benchmark-lab + dev dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Lint (ruff)
+        run: ruff check src/ tests/
+
+      - name: Format check (black)
+        run: black --check src/ tests/
+
+      - name: Type check (mypy, informational)
+        run: mypy src/ || true
+
+      # ÖNEMLİ: test_benchmark.py MLflowLogger / LLMEvaluator / OllamaClient'ı
+      # tamamen mock'luyor. Bu job hiçbir zaman gerçek Ollama/Chroma/MLflow'a
+      # bağlanmaya çalışmaz — GPU gerektirmez, GitHub-hosted runner'da çalışır.
+      # get_vram_usage_mb() de nvidia-smi bulunamazsa 0.0 dönecek şekilde
+      # zaten try/except ile korunuyor.
+      - name: Run unit tests
+        run: pytest tests/ -v --tb=short
