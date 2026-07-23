@@ -1,10 +1,14 @@
 import os
-from fastapi import FastAPI, HTTPException
+import re
+import uuid
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Dict, Any
 
 from rag_benchmark_lab.benchmark import RAGBenchmarkRunner
+from rag_benchmark_lab.pipeline import RAGPipeline
+from rag_benchmark_lab.document_extraction import extract_text, SUPPORTED_EXTENSIONS
 
 app = FastAPI(
     title="RAG Benchmark Lab API",
@@ -47,6 +51,22 @@ class BatchEvalRequest(BaseModel):
 def health_check():
     """Confirms the laboratory API is up and running."""
     return {"status": "healthy", "service": "rag-benchmark-lab"}
+
+@app.post("/extract-document", summary="Extract raw text from an uploaded document")
+async def extract_document(file: UploadFile = File(...)) -> Dict[str, Any]:
+    """Extracts plain text from an uploaded .txt/.md/.pdf file so it can be
+    used as `raw_text` for /benchmark or /batch-evaluate, instead of
+    requiring the knowledge base to be hand-typed into a textarea."""
+    content = await file.read()
+    try:
+        text = extract_text(filename=file.filename or "", content=content)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return {
+        "filename": file.filename,
+        "characters": len(text),
+        "text": text,
+    }
 
 @app.post("/benchmark", summary="Run RAG Grid Benchmark")
 def run_benchmark(request: BenchmarkRequest) -> Dict[str, Any]:

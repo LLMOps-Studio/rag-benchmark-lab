@@ -19,7 +19,9 @@ dependencies = [
   "langchain-core>=0.2.10",
   "langchain-text-splitters>=0.2.0",
   "posthog<3.0.0",
-  "llmops-common"
+  "llmops-common",
+  "pypdf>=4.0.0",
+  "python-multipart>=0.0.9"
 ]
 
 [project.optional-dependencies]
