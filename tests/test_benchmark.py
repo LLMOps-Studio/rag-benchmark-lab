@@ -1,19 +1,31 @@
-import pytest
 from unittest.mock import MagicMock, patch
+
+import pytest
+
 from rag_benchmark_lab.benchmark import RAGBenchmarkRunner
+
 
 @pytest.fixture
 def mock_runner():
     """Fixture to mock MLflow interactions and sub-component dependencies."""
-    with patch("llmops_common.logging.mlflow_logger.MLflowLogger.__init__", return_value=None), \
-         patch("llmops_common.eval.evaluator.LLMEvaluator.__init__", return_value=None), \
-         patch("llmops_common.client.ollama_client.OllamaClient.__init__", return_value=None):
-        
+    with (
+        patch(
+            "llmops_common.logging.mlflow_logger.MLflowLogger.__init__",
+            return_value=None,
+        ),
+        patch("llmops_common.eval.evaluator.LLMEvaluator.__init__", return_value=None),
+        patch(
+            "llmops_common.client.ollama_client.OllamaClient.__init__",
+            return_value=None,
+        ),
+    ):
+
         runner = RAGBenchmarkRunner(experiment_name="test_exp")
         runner.logger = MagicMock()
         runner.evaluator = MagicMock()
         runner.ollama_client = MagicMock()
         return runner
+
 
 @patch("rag_benchmark_lab.benchmark.RAGPipeline")
 @patch("mlflow.log_metric")
@@ -25,7 +37,7 @@ def test_run_grid_benchmark_success(mock_log_metric, mock_pipeline, mock_runner)
     pipeline_instance.answer_query.return_value = {
         "context": "MLOps ensures continuous deployment.",
         "query": "What is MLOps?",
-        "answer": "MLOps handles deployment."
+        "answer": "MLOps handles deployment.",
     }
     mock_pipeline.return_value = pipeline_instance
 
@@ -36,14 +48,14 @@ def test_run_grid_benchmark_success(mock_log_metric, mock_pipeline, mock_runner)
     # Inputs
     sample_text = "MLOps context data snippet."
     queries = ["What is MLOps?"]
-    
+
     # Run a single combinatorics loop
     summaries = mock_runner.run_grid_benchmark(
         raw_text=sample_text,
         test_queries=queries,
         chunk_sizes=[200],
         chunk_overlaps=[20],
-        models=["phi3:latest"]
+        models=["phi3:latest"],
     )
 
     # Assertions
@@ -51,7 +63,7 @@ def test_run_grid_benchmark_success(mock_log_metric, mock_pipeline, mock_runner)
     assert summaries[0]["chunk_size"] == 200
     assert summaries[0]["avg_faithfulness"] == 1.0
     assert summaries[0]["avg_relevance"] == 0.8
-    
+
     # Verify trace control boundaries were called cleanly
     mock_runner.logger.start_trace.assert_called_once()
     mock_runner.logger.end_trace.assert_called_once()
