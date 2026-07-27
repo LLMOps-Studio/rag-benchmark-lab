@@ -6,6 +6,7 @@ without spinning up FastAPI, and separate from RAGPipeline itself since
 "get text out of a file" and "chunk + embed + retrieve" are different
 concerns.
 """
+
 from pathlib import Path
 
 SUPPORTED_EXTENSIONS = {".txt", ".md", ".pdf"}
@@ -55,7 +56,9 @@ def _extract_pdf(content: bytes, filename: str) -> str:
 
     try:
         reader = PdfReader(io.BytesIO(content))
-    except Exception as e:
+    # Any corrupt/malformed PDF should surface as the same clean ValueError
+    # the caller already handles, not an unhandled pypdf exception.
+    except Exception as e:  # noqa: BLE001
         raise ValueError(f"'{filename}' could not be read as a PDF: {e}")
 
     pages = [page.extract_text() or "" for page in reader.pages]
