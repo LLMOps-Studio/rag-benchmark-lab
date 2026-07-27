@@ -10,7 +10,9 @@ def test_extracts_plain_txt():
 
 
 def test_extracts_markdown():
-    assert extract_text("readme.md", b"# Title\n\nBody text.") == "# Title\n\nBody text."
+    assert (
+        extract_text("readme.md", b"# Title\n\nBody text.") == "# Title\n\nBody text."
+    )
 
 
 def test_extracts_latin1_fallback():
@@ -31,7 +33,7 @@ def test_rejects_empty_content():
 
 
 def test_extracts_real_pdf_text():
-    reportlab = pytest.importorskip("reportlab")
+    pytest.importorskip("reportlab")
     from reportlab.pdfgen import canvas
 
     buf = io.BytesIO()
