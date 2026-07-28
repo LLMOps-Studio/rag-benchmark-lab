@@ -103,15 +103,76 @@ def test_batch_evaluate_computes_format_penalty(mock_pipeline_cls):
                 {"query": "q1", "expected_output": "BULLISH"},
                 {"query": "q2", "expected_output": "BEARISH"},
             ],
-            "model": "phi3:latest",
+            "models": ["phi3:latest"],
         },
     )
 
     assert response.status_code == 200
     data = response.json()
-    assert data["metrics"]["total_tested"] == 2
-    assert data["metrics"]["format_violations"] == 1
-    assert data["metrics"]["strict_accuracy_percentage"] == 50.0
+    model_result = data["results_by_model"]["phi3:latest"]
+    assert model_result["metrics"]["total_tested"] == 2
+    assert model_result["metrics"]["format_violations"] == 1
+    assert model_result["metrics"]["strict_accuracy_percentage"] == 50.0
+    # A single model has no pair to compare against.
+    assert data["comparisons"] == []
+
+
+@patch("rag_benchmark_lab.api.RAGPipeline")
+def test_batch_evaluate_multi_model_reports_pairwise_comparison(mock_pipeline_cls):
+    mock_pipeline = MagicMock()
+    # phi3 gets both items right; qwen gets only the first right -- one
+    # discordant pair between the two models.
+    mock_pipeline.answer_query.side_effect = [
+        {"answer": "The signal is BULLISH based on the data."},  # phi3, q1
+        {"answer": "The signal is BEARISH based on the data."},  # phi3, q2
+        {"answer": "The signal is BULLISH based on the data."},  # qwen, q1
+        {"answer": "I'm not sure, maybe positive?"},  # qwen, q2
+    ]
+    mock_pipeline_cls.return_value = mock_pipeline
+
+    response = client.post(
+        "/batch-evaluate",
+        json={
+            "raw_text": "some knowledge base",
+            "dataset": [
+                {"query": "q1", "expected_output": "BULLISH"},
+                {"query": "q2", "expected_output": "BEARISH"},
+            ],
+            "models": ["phi3:latest", "qwen2.5:3b"],
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert set(data["results_by_model"].keys()) == {"phi3:latest", "qwen2.5:3b"}
+    assert (
+        data["results_by_model"]["phi3:latest"]["metrics"]["strict_accuracy_percentage"]
+        == 100.0
+    )
+    assert (
+        data["results_by_model"]["qwen2.5:3b"]["metrics"]["strict_accuracy_percentage"]
+        == 50.0
+    )
+
+    assert len(data["comparisons"]) == 1
+    comparison = data["comparisons"][0]
+    assert comparison["model_a"] == "phi3:latest"
+    assert comparison["model_b"] == "qwen2.5:3b"
+    assert comparison["method"] == "exact"
+    assert 0.0 <= comparison["p_value"] <= 1.0
+
+
+def test_batch_evaluate_requires_at_least_one_model():
+    response = client.post(
+        "/batch-evaluate",
+        json={
+            "raw_text": "some knowledge base",
+            "dataset": [{"query": "q1", "expected_output": "BULLISH"}],
+            "models": [],
+        },
+    )
+
+    assert response.status_code == 422
 
 
 def test_metrics_endpoint_exposes_prometheus_data():

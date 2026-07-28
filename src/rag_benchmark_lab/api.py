@@ -1,12 +1,14 @@
 import os
 import re
 import uuid
+from itertools import combinations
 from typing import Any
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from llmops_common.observability.instrumentation import instrument_app
-from pydantic import BaseModel
+from llmops_common.stats.significance import mcnemar_test
+from pydantic import BaseModel, Field
 
 from rag_benchmark_lab.benchmark import RAGBenchmarkRunner
 from rag_benchmark_lab.document_extraction import extract_text
@@ -48,7 +50,7 @@ class BatchEvalRequest(BaseModel):
     experiment_name: str = "golden_dataset_eval"
     raw_text: str
     dataset: list[BatchDatasetItem]
-    model: str
+    models: list[str] = Field(min_length=1)
     chunk_size: int = 300
     chunk_overlap: int = 30
 
@@ -108,77 +110,116 @@ def run_benchmark(request: BenchmarkRequest) -> dict[str, Any]:
         )
 
 
+def _run_single_model_batch(
+    pipeline: RAGPipeline, model: str, dataset: list[BatchDatasetItem]
+) -> dict[str, Any]:
+    """
+    Runs the full golden dataset against one model and strictly calculates
+    'Format Penalty' based on Finwise Neuro-Symbolic Label Contracts.
+    """
+    results = []
+    format_violations = 0
+    total_items = len(dataset)
+
+    for item in dataset:
+        output = pipeline.answer_query(query=item.query, model_name=model)
+        actual_answer = output["answer"]
+
+        # --- FINWISE STRICT FORMAT ADHERENCE (LABEL CONTRACT) ---
+        is_format_valid = True
+        expected = item.expected_output.upper()
+
+        # Test A: Canonical Label Check (BULLISH, BEARISH, NEUTRAL)
+        if expected in ["BULLISH", "BEARISH", "NEUTRAL"]:
+            if expected not in actual_answer.upper():
+                is_format_valid = False
+
+        # Test B: Neuro-Symbolic Token Match (e.g., P_8_V_9) -- ensure the
+        # exact token format is present in the LLM's raw generation
+        elif re.search(r"P_[0-9]_V_[0-9]", expected) and expected not in actual_answer:
+            is_format_valid = False
+
+        if not is_format_valid:
+            format_violations += 1
+
+        results.append(
+            {
+                "query": item.query,
+                "expected": item.expected_output,
+                "actual": actual_answer,
+                "format_valid": is_format_valid,
+            }
+        )
+
+    format_penalty_score = (
+        (format_violations / total_items) * 100 if total_items > 0 else 0.0
+    )
+    accuracy = 100.0 - format_penalty_score
+
+    return {
+        "metrics": {
+            "total_tested": total_items,
+            "format_violations": format_violations,
+            "strict_accuracy_percentage": accuracy,
+            "format_penalty_percentage": format_penalty_score,
+        },
+        "detailed_results": results,
+    }
+
+
 @app.post("/batch-evaluate", summary="Run Golden Dataset Regression Test")
 def run_batch_evaluation(request: BatchEvalRequest) -> dict[str, Any]:
     """
-    Executes a batch of queries against the RAG pipeline.
-    Strictly calculates 'Format Penalty' based on Finwise Neuro-Symbolic Label Contracts.
+    Executes a batch of queries against the RAG pipeline for one or more
+    models (all against the same ingested knowledge base, so results are
+    paired item-for-item across models), then reports a McNemar comparison
+    between every pair of models on their format-compliance results.
     """
     try:
         # 1. Initialize isolated collection for this specific batch run
         unique_collection = f"batch_{uuid.uuid4().hex[:8]}"
         pipeline = RAGPipeline(collection_name=unique_collection)
 
-        # 2. Ingest the golden knowledge base
+        # 2. Ingest the golden knowledge base once, shared across all models
         pipeline.ingest_documents(
             raw_text=request.raw_text,
             chunk_size=request.chunk_size,
             chunk_overlap=request.chunk_overlap,
         )
 
-        results = []
-        format_violations = 0
-        total_items = len(request.dataset)
+        # 3. Run the full dataset against each model
+        results_by_model: dict[str, Any] = {}
+        format_valid_by_model: dict[str, list[bool]] = {}
+        for model in request.models:
+            model_result = _run_single_model_batch(pipeline, model, request.dataset)
+            results_by_model[model] = model_result
+            format_valid_by_model[model] = [
+                item["format_valid"] for item in model_result["detailed_results"]
+            ]
 
-        # 3. Iterate through Golden Dataset
-        for item in request.dataset:
-            output = pipeline.answer_query(query=item.query, model_name=request.model)
-            actual_answer = output["answer"]
-
-            # --- FINWISE STRICT FORMAT ADHERENCE (LABEL CONTRACT) ---
-            is_format_valid = True
-            expected = item.expected_output.upper()
-
-            # Test A: Canonical Label Check (BULLISH, BEARISH, NEUTRAL)
-            if expected in ["BULLISH", "BEARISH", "NEUTRAL"]:
-                if expected not in actual_answer.upper():
-                    is_format_valid = False
-
-            # Test B: Neuro-Symbolic Token Match (e.g., P_8_V_9) -- ensure the
-            # exact token format is present in the LLM's raw generation
-            elif (
-                re.search(r"P_[0-9]_V_[0-9]", expected)
-                and expected not in actual_answer
-            ):
-                is_format_valid = False
-
-            if not is_format_valid:
-                format_violations += 1
-
-            results.append(
+        # 4. Paired McNemar comparison between every pair of models, on the
+        # same (item-aligned) format-compliance results -- an
+        # independent-samples test would be wrong here since every model
+        # answers the exact same dataset.
+        comparisons = []
+        for model_a, model_b in combinations(request.models, 2):
+            result = mcnemar_test(
+                format_valid_by_model[model_a], format_valid_by_model[model_b]
+            )
+            comparisons.append(
                 {
-                    "query": item.query,
-                    "expected": item.expected_output,
-                    "actual": actual_answer,
-                    "format_valid": is_format_valid,
+                    "model_a": model_a,
+                    "model_b": model_b,
+                    "p_value": result.p_value,
+                    "effect_size": result.effect_size,
+                    "method": result.method,
                 }
             )
 
-        # 4. Calculate Final Telemetry
-        format_penalty_score = (
-            (format_violations / total_items) * 100 if total_items > 0 else 0.0
-        )
-        accuracy = 100.0 - format_penalty_score
-
         return {
             "status": "success",
-            "metrics": {
-                "total_tested": total_items,
-                "format_violations": format_violations,
-                "strict_accuracy_percentage": accuracy,
-                "format_penalty_percentage": format_penalty_score,
-            },
-            "detailed_results": results,
+            "results_by_model": results_by_model,
+            "comparisons": comparisons,
         }
 
     # Any failure in the batch run (LLM error, chroma error, etc.) should be
